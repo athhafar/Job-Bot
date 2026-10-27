@@ -1,0 +1,62 @@
+name: Job Opportunity Bot
+
+on:
+  schedule:
+    # Berjalan otomatis setiap 20 menit (GitHub Actions gratis)
+    # Format cron: menit jam hari-bulan bulan hari-minggu (UTC)
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+    # Memungkinkan trigger manual lewat tab Actions di GitHub UI
+
+# Cegah 2 workflow berjalan bersamaan untuk menghindari race condition pada seen.json
+concurrency:
+  group: job-opportunity-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    name: Run Mobile Job Opportunity Scanner
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute Job Opportunity Bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3.8-flash' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py
+
+      - name: Commit Updated Seen State
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen.json
+          # Hanya commit jika ada perubahan pada seen.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update seen.json [skip ci]"
+            git push
+            echo "State seen.json updated successfully."
+          else
+            echo "Tidak ada lowongan baru yang diproses, seen.json tidak berubah."
+          fi

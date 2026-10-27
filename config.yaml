@@ -1,0 +1,142 @@
+# ============================================================
+# Mobile Job Opportunity Bot Configuration
+# ============================================================
+
+settings:
+  # Batas maksimal panggilan ke Gemini API dalam satu kali run (untuk hemat kuota free tier)
+  max_gemini_calls_per_run: 10
+
+  # Ambang batas skor relevansi Gemini (skala 1-10) untuk dikirim ke Telegram
+  # Notifikasi hanya dikirim jika is_opportunity = true DAN relevance >= relevance_threshold
+  relevance_threshold: 6
+
+  # Hanya memproses postingan dalam X jam terakhir
+  max_post_age_hours: 24
+
+  # Jumlah maksimal ID yang disimpan di seen.json untuk mencegah file membesar
+  max_seen_items: 5000
+
+  # Timeout HTTP request dalam detik
+  request_timeout_seconds: 15
+
+  # Jeda minimal pengiriman notifikasi error ke Telegram (dalam menit, agar tidak spam)
+  error_notify_cooldown_minutes: 60
+
+keywords:
+  # Postingan WAJIB mengandung minimal salah satu kata kunci mobile development ini
+  include:
+    - "flutter"
+    - "kotlin"
+    - "android"
+    - "react native"
+    - "react-native"
+    - "mobile developer"
+    - "mobile engineer"
+    - "mobile app"
+    - "ios/android"
+    - "android/ios"
+    - "dart"
+    - "expo"
+
+  # Postingan WAJIB mengandung indikasi bahwa pembuat posting sedang mencari developer / menawarkan kerja
+  hiring:
+    - "hiring"
+    - "looking for"
+    - "we're hiring"
+    - "we are hiring"
+    - "need developer"
+    - "need a developer"
+    - "freelance"
+    - "contract"
+    - "remote"
+    - "lowongan"
+    - "dicari"
+    - "open position"
+    - "job opening"
+    - "join our team"
+    - "opportunity"
+    - "seeking a developer"
+    - "looking to hire"
+
+  # Postingan yang mengandung kata kunci ini LANGSUNG di-skip (tidak bayar/magang/pencari kerja)
+  exclude:
+    - "unpaid"
+    - "internship"
+    - "magang"
+    - "volunteer"
+    - "for hire"
+    - "[for hire]"
+    - "[forhire]"
+    - "(for hire)"
+    - "looking for a job"
+    - "looking for work"
+    - "available for hire"
+    - "hire me"
+    - "seeking employment"
+    - "portfolio review"
+
+sources:
+  # 1. RSS Job Boards Publik (Gratis, tanpa auth)
+  rss:
+    enabled: true
+    feeds:
+      - name: "RemoteOK Mobile"
+        url: "https://remoteok.com/remote-mobile-jobs.rss"
+      - name: "RemoteOK Dev"
+        url: "https://remoteok.com/remote-dev-jobs.rss"
+      - name: "We Work Remotely - Programming"
+        url: "https://weworkremotely.com/categories/remote-programming-jobs.rss"
+      - name: "Himalayas Tech Jobs"
+        url: "https://himalayas.app/jobs/rss"
+
+  # 2. Reddit via RSS/JSON publik (Gunakan User-Agent yang jelas)
+  reddit:
+    enabled: true
+    user_agent: "JobOpportunityBot/1.0 (mobile-dev-hunter by github-action)"
+    subreddits:
+      - "forhire"
+      - "FlutterDev"
+      - "androiddev"
+      - "reactnative"
+      - "remotejs"
+    # Batas item diambil per subreddit
+    limit_per_sub: 25
+
+  # 3. Hacker News "Who is hiring" / Algolia Search API (Gratis, tanpa key)
+  hacker_news:
+    enabled: true
+    queries:
+      - "mobile"
+      - "flutter"
+      - "react native"
+      - "android kotlin"
+    limit_per_query: 20
+
+  # 4. Meta Threads API (Kerangka/Stub - default nonaktif)
+  threads:
+    enabled: false
+    # TODO: Untuk mengaktifkan, daftarkan Meta Developer App & Threads API
+    # Isi access_token di environment variable THREADS_ACCESS_TOKEN
+    keywords:
+      - "flutter developer"
+      - "mobile developer"
+      - "react native"
+
+  # 5. Telegram Channel Loker (Kerangka/Stub - default nonaktif)
+  telegram_channels:
+    enabled: false
+    # TODO: Untuk mengaktifkan, tambahkan bot Anda sebagai Admin/Member ke channel/group
+    # yang membagikan info lowongan, lalu gunakan getUpdates atau webhook.
+    channels: []
+
+# Template balasan statis (digunakan jika Gemini API rate-limited / kuota habis setelah 3x retry)
+fallback_templates:
+  comment_draft: >
+    Halo! Saya mobile developer dengan fokus di Flutter, Android Kotlin, dan React Native. 
+    Tertarik mendiskusikan kebutuhan project ini lebih lanjut. Boleh saya hubungi via DM untuk detail & portofolio?
+  dm_draft: >
+    Halo! Saya melihat postingan Anda mengenai kebutuhan Mobile Developer. 
+    Saya berpengalaman membangun aplikasi mobile multiplatform (Flutter & React Native) serta native Android (Kotlin) yang scalable dan sudah live di store. 
+    Saya siap membantu baik untuk kontrak remote maupun freelance. 
+    Berikut portofolio saya: https://github.com/yourusername. 
+    Kapan waktu yang nyaman bagi Anda untuk mendiskusikan kebutuhan spesifiknya? Terima kasih!

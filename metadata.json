@@ -1,0 +1,6 @@
+{
+  "name": "Mobile Job Opportunity Bot",
+  "description": "AI-powered job opportunity detector for Flutter, Android Kotlin, and React Native with Telegram notifications and Gemini drafts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
