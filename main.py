@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Mobile Job Opportunity Bot - Main Orchestrator.
+"""Mobile Job Opportunity Bot (Meta Threads Source Only).
 
-Monitors mobile development job opportunities (Flutter, Android Kotlin, React Native),
-filters noise, evaluates with Gemini AI, and delivers actionable alerts with ready-to-use
-comment & DM drafts to Telegram.
+Monitors mobile development job opportunities exclusively via official Meta Threads API,
+filters opportunities with strict whole-word regex matching, crafts professional response
+drafts using Google Gemini AI, and delivers actionable alerts to Telegram.
 """
+from __future__ import annotations
 
 import argparse
 import logging
 import os
 import sys
-from typing import List, Dict, Any
+import time
+from typing import Any, Dict, List, Optional
 import yaml
 from dotenv import load_dotenv
 
-from sources.base import JobItem, BaseSource
-from sources.rss import RSSSource
-from sources.reddit import RedditSource
-from sources.hn import HackerNewsSource
-from sources.threads_stub import ThreadsStubSource, TelegramChannelStubSource
-from core.storage import Storage
 from core.filters import JobFilter
-from core.gemini_client import GeminiClient
+from core.gemini_client import GeminiClient, validate_profile_content
 from core.notifier import TelegramNotifier
+from core.storage import Storage
+from core.threads_token import ThreadsTokenManager
+from sources.base import JobItem
+from sources.threads import ThreadsAPIError, ThreadsSource, mask_secret
 
-# Load environment variables from .env if present
+# Load environment variables
 load_dotenv()
 
 # Configure logging
@@ -33,177 +33,267 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("JobBot")
+logger = logging.getLogger("JobBot-Threads")
+
+
+def check_required_env_vars() -> None:
+    """Validates that credentials exist and do not contain template placeholders."""
+    token = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
+    if not token or token.startswith("ISI_"):
+        logger.error("Isi THREADS_ACCESS_TOKEN di .env dulu.")
+        print("\n❌ ERROR: Isi THREADS_ACCESS_TOKEN di .env dulu.")
+        print("Dapatkan User Access Token dari Meta for Developers > Threads App > User Token Generator.\n")
+        sys.exit(1)
 
 
 def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
-    """Loads YAML configuration file."""
     if not os.path.exists(config_path):
-        logger.error(f"Config file not found: {config_path}")
+        logger.error("Config file not found: %s", config_path)
         sys.exit(1)
-
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
-def init_sources(config: Dict[str, Any]) -> List[BaseSource]:
-    """Instantiates enabled sources based on config.yaml."""
-    sources_cfg = config.get("sources", {})
-    timeout = config.get("settings", {}).get("request_timeout_seconds", 15)
-    active_sources: List[BaseSource] = []
+def run_test_threads(config: Dict[str, Any]) -> None:
+    """Executes --test-threads to verify access token and API response."""
+    check_required_env_vars()
+    token = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
+    threads_cfg = config.get("sources", {}).get("threads", {})
+    keywords = threads_cfg.get("keywords", ["flutter developer"])
+    test_kw = keywords[0] if keywords else "flutter developer"
 
-    # 1. RSS Feeds
-    rss_cfg = sources_cfg.get("rss", {})
-    if rss_cfg.get("enabled", True):
-        feeds = rss_cfg.get("feeds", [])
-        if feeds:
-            active_sources.append(RSSSource(feeds=feeds, timeout=timeout))
+    print("\n" + "=" * 65)
+    print("🔍 MENGUJI KONEKSI META THREADS API (--test-threads)")
+    print(f"Token Terdeteksi: {mask_secret(token)}")
+    print(f"Keyword Uji: '{test_kw}'")
+    print("=" * 65)
 
-    # 2. Reddit
-    reddit_cfg = sources_cfg.get("reddit", {})
-    if reddit_cfg.get("enabled", True):
-        subs = reddit_cfg.get("subreddits", [])
-        ua = reddit_cfg.get("user_agent", "JobOpportunityBot/1.0")
-        limit = reddit_cfg.get("limit_per_sub", 25)
-        if subs:
-            active_sources.append(RedditSource(subreddits=subs, user_agent=ua, limit_per_sub=limit, timeout=timeout))
+    source = ThreadsSource(
+        access_token=token,
+        keywords=[test_kw],
+        timeout=int(config.get("settings", {}).get("request_timeout_seconds", 15)),
+    )
 
-    # 3. Hacker News
-    hn_cfg = sources_cfg.get("hacker_news", {})
-    if hn_cfg.get("enabled", True):
-        queries = hn_cfg.get("queries", ["mobile", "flutter", "react native", "android"])
-        limit_q = hn_cfg.get("limit_per_query", 20)
-        active_sources.append(HackerNewsSource(queries=queries, limit_per_query=limit_q, timeout=timeout))
-
-    # 4. Threads (Stub)
-    threads_cfg = sources_cfg.get("threads", {})
-    if threads_cfg.get("enabled", False):
-        active_sources.append(ThreadsStubSource(keywords=threads_cfg.get("keywords", []), timeout=timeout))
-
-    # 5. Telegram Channels (Stub)
-    tg_chan_cfg = sources_cfg.get("telegram_channels", {})
-    if tg_chan_cfg.get("enabled", False):
-        active_sources.append(TelegramChannelStubSource(channels=tg_chan_cfg.get("channels", []), timeout=timeout))
-
-    return active_sources
+    try:
+        count, sample_items = source.test_search(keyword=test_kw)
+        print(f"\n✅ Koneksi Threads API Berhasil!")
+        print(f"Total postingan ditemukan untuk '{test_kw}': {count}")
+        if sample_items:
+            print("\n📋 3 Contoh Postingan Teratas:")
+            for idx, it in enumerate(sample_items, start=1):
+                print(f"  {idx}. [{it.source}] {it.title}")
+                print(f"     URL: {it.url}")
+        else:
+            print("ℹ️ Tidak ada postingan yang ditemukan untuk keyword ini.")
+            print("Catatan: Sebelum permission 'threads_keyword_search' disetujui Meta,")
+            print("API hanya mengembalikan postingan yang dibuat oleh akun tester Anda sendiri.")
+        print("=" * 65 + "\n")
+    except ThreadsAPIError as e:
+        print(f"\n❌ Threads API Error ({e.status_code}): {e.message}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Gagal menghubungi Threads API: {e}")
+        sys.exit(1)
 
 
 def run_pipeline(dry_run: bool = False, config_path: str = "config.yaml") -> int:
-    """Executes the full pipeline: Fetch -> Filter -> Gemini Draft -> Telegram Notify."""
+    """Executes the full pipeline: Threads -> filter -> Gemini -> Telegram."""
+    check_required_env_vars()
+
     config = load_config(config_path)
     settings = config.get("settings", {})
     max_gemini_calls = int(settings.get("max_gemini_calls_per_run", 10))
     relevance_threshold = int(settings.get("relevance_threshold", 6))
     max_seen = int(settings.get("max_seen_items", 5000))
-    cooldown_error_min = int(settings.get("error_notify_cooldown_minutes", 60))
+    timeout_sec = int(settings.get("request_timeout_seconds", 15))
+    error_cooldown_min = int(settings.get("error_notify_cooldown_minutes", 60))
 
     storage = Storage(filepath="seen.json", max_items=max_seen)
     notifier = TelegramNotifier()
     job_filter = JobFilter(config=config, storage=storage)
+
+    # Validate profile content early
+    profile_path = "config/profile.md"
+    try:
+        if os.path.exists(profile_path):
+            with open(profile_path, "r", encoding="utf-8") as pf:
+                validate_profile_content(pf.read())
+        else:
+            raise ValueError("File config/profile.md tidak ditemukan.")
+    except ValueError as ve:
+        logger.error("%s", ve)
+        print(f"\n❌ ERROR: {ve}\n")
+        return 1
+
     gemini = GeminiClient(
         fallback_templates=config.get("fallback_templates", {}),
         prompt_path="prompts/draft.txt",
-        profile_path="config/profile.md",
+        profile_path=profile_path,
+        read_timeout=45,
+        inter_call_delay=6.0,
     )
 
-    logger.info("=" * 60)
-    logger.info(f"Starting Job Opportunity Bot (Dry Run: {dry_run})")
-    logger.info("=" * 60)
+    logger.info("=" * 65)
+    logger.info("Starting Mobile Job Opportunity Bot (Meta Threads Source)")
+    logger.info("Dry Run Mode: %s", dry_run)
+    logger.info("=" * 65)
 
+    # Check token health (Inspect token and alert if near expiry < 10 days)
+    threads_token = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
+    token_mgr = ThreadsTokenManager(
+        access_token=threads_token,
+        app_id=os.environ.get("THREADS_APP_ID", "").strip(),
+        app_secret=os.environ.get("THREADS_APP_SECRET", "").strip(),
+        timeout=timeout_sec,
+    )
+
+    # 1. Fetch from Meta Threads API
+    threads_cfg = config.get("sources", {}).get("threads", {})
+    source = ThreadsSource(
+        access_token=threads_token,
+        keywords=threads_cfg.get("keywords", []),
+        own_username=threads_cfg.get("own_username", ""),
+        delay_seconds=float(threads_cfg.get("rate_limit_delay_seconds", 1.5)),
+        max_requests_per_run=int(threads_cfg.get("max_requests_per_run", 10)),
+        max_pages_per_keyword=int(threads_cfg.get("max_pages_per_keyword", 2)),
+        timeout=timeout_sec,
+    )
+
+    raw_items: List[JobItem] = []
     try:
-        # Step 1: Collect from all sources with isolated fault-tolerance
-        sources = init_sources(config)
-        all_raw_items: List[JobItem] = []
+        raw_items = source.fetch()
+    except Exception as e:
+        logger.critical("Gagal mengambil data dari Threads: %s", e)
+        if not dry_run:
+            if source.token_expired_error and storage.can_send_token_expired_alert():
+                notifier.send_token_expired_alert()
+                storage.record_token_expired_alert_sent()
+                storage.save()
+            elif source.permission_error and storage.can_send_permission_alert():
+                notifier.send_permission_alert()
+                storage.record_permission_alert_sent()
+                storage.save()
+            elif storage.can_send_error_notification(cooldown_minutes=error_cooldown_min):
+                notifier.send_error_alert(f"Threads API Failure: {str(e)}")
+                storage.record_error_notification_sent()
+                storage.save()
+        return 1
 
-        for src in sources:
-            try:
-                items = src.fetch()
-                all_raw_items.extend(items)
-            except Exception as src_err:
-                logger.error(f"Error executing source {src.name}: {src_err}", exc_info=True)
+    # Check for permission/token status reported by source
+    if source.token_expired_error:
+        if not dry_run and storage.can_send_token_expired_alert():
+            notifier.send_token_expired_alert()
+            storage.record_token_expired_alert_sent()
+            storage.save()
+        return 1
 
-        logger.info(f"Total raw items collected from all sources: {len(all_raw_items)}")
+    if source.permission_error:
+        if not dry_run and storage.can_send_permission_alert():
+            notifier.send_permission_alert()
+            storage.record_permission_alert_sent()
+            storage.save()
+        return 1
 
-        # Step 2: Multi-stage pre-filtering
-        candidates = job_filter.filter_batch(all_raw_items)
-        logger.info(f"Items passing pre-filter criteria: {len(candidates)}")
+    logger.info("Total postingan Threads diambil: %d", len(raw_items))
 
-        if not candidates:
-            logger.info("Tidak ada lowongan baru yang memenuhi kriteria filter pada run ini.")
-            return 0
+    # 2. Strict Pre-filtering (Regex whole-word matching)
+    candidates = job_filter.filter_batch(raw_items)
+    logger.info("Postingan lolos filter bertahap: %d", len(candidates))
 
-        # Step 3: Rate limiter - process up to max_gemini_calls
-        if len(candidates) > max_gemini_calls:
-            logger.info(f"Membatasi analisis ke {max_gemini_calls} postingan teratas untuk hemat kuota Gemini.")
-            candidates = candidates[:max_gemini_calls]
+    if not candidates:
+        logger.info("Tidak ada postingan baru yang memenuhi kriteria filter pada run ini.")
+        if dry_run:
+            logger.info("Total notifikasi yang AKAN dikirim (dry-run, tidak dikirim): 0")
+        return 0
 
-        notified_count = 0
+    if len(candidates) > max_gemini_calls:
+        logger.info("Membatasi ke %d postingan teratas untuk hemat kuota Gemini.", max_gemini_calls)
+        candidates = candidates[:max_gemini_calls]
 
-        # Step 4: AI Analysis & Drafting + Notification
-        for index, item in enumerate(candidates, start=1):
-            logger.info(f"[{index}/{len(candidates)}] Menilai dengan Gemini: '{item.title[:60]}...'")
-            analysis = gemini.evaluate_and_draft(item)
+    will_send_count = 0
 
-            if not analysis:
-                logger.warning(f"Tidak ada respons dari evaluator untuk item: {item.id}")
-                continue
+    # 3. Gemini Evaluation & Telegram Notification
+    for index, item in enumerate(candidates, start=1):
+        logger.info("[%d/%d] Evaluasi dengan Gemini: '%s...'", index, len(candidates), item.title[:50])
 
-            is_opp = analysis.get("is_opportunity", False)
-            score = analysis.get("relevance", 0)
+        # Delay between Gemini calls (minimum 6s)
+        if index > 1:
+            time.sleep(6.0)
 
-            logger.info(f"Hasil AI -> Is Opportunity: {is_opp}, Skor Relevansi: {score}/10")
+        analysis = gemini.evaluate_and_draft(item)
+        if not analysis:
+            continue
 
-            if not is_opp:
-                logger.info(f"Dilewati: AI menilai postingan BUKAN lowongan/proyek mobile dev valid.")
-                if not dry_run:
-                    storage.mark_seen(item.id, item.url)
-                continue
+        # Check if consecutive 429 quota exhausted triggered
+        if gemini.quota_exhausted and not dry_run and storage.can_send_gemini_quota_alert():
+            notifier.send_gemini_quota_alert()
+            storage.record_gemini_quota_alert_sent()
+            storage.save()
 
-            if score < relevance_threshold:
-                logger.info(f"Dilewati: Skor ({score}) di bawah ambang batas ({relevance_threshold}).")
-                if not dry_run:
-                    storage.mark_seen(item.id, item.url)
-                continue
+        failed_ai = analysis.get("failed_ai", False)
+        relevance = analysis.get("relevance")
+        is_opp = analysis.get("is_opportunity", False)
 
-            # Qualified Opportunity!
+        if failed_ai:
+            # PENTING: Jika Gemini gagal, JANGAN beri skor palsu!
+            # Kirim notif berlabel "⚠️ Tanpa penilaian AI" HANYA karena lolos filter ketat di atas.
+            # JANGAN masukkan ke seen.json agar dicoba lagi di run berikutnya.
+            logger.warning(
+                "Gemini gagal menilai. Postingan lolos filter ketat akan dikirim tanpa skor AI (tidak disimpan ke seen.json)."
+            )
+            will_send_count += 1
             if dry_run:
                 print("\n" + "=" * 65)
-                print(f"🎯 [DRY-RUN MATCH] [{score}/10] {item.title}")
+                print(f"⚠️ [DRY-RUN FALLBACK TANPA SKOR AI] {item.title}")
                 print(f"📌 Sumber: {item.source} | URL: {item.url}")
                 print(f"📝 Ringkasan: {analysis.get('summary')}")
                 print(f"💬 Draft Komentar:\n{analysis.get('comment_draft')}")
                 print(f"✉️ Draft DM:\n{analysis.get('dm_draft')}")
                 print("=" * 65 + "\n")
-                notified_count += 1
             else:
-                sent = notifier.send_opportunity(item, analysis)
-                if sent:
-                    notified_count += 1
-                    logger.info(f"Notifikasi berhasil terkirim ke Telegram untuk '{item.title[:40]}'")
-                else:
-                    logger.error(f"Gagal mengirim notifikasi Telegram untuk '{item.title[:40]}'")
+                notifier.send_opportunity(item, analysis)
+                # DO NOT mark seen! It will be retried when Gemini quota recovers.
+            continue
 
+        if not is_opp:
+            logger.info("Dilewati: AI menilai postingan bukan lowongan/proyek mobile dev valid.")
+            if not dry_run:
                 storage.mark_seen(item.id, item.url)
+            continue
 
-        logger.info(f"Pipeline selesai. Total notifikasi terkirim: {notified_count}")
+        if relevance is not None and relevance < relevance_threshold:
+            logger.info("Dilewati: Skor relevansi (%d) di bawah ambang batas (%d).", relevance, relevance_threshold)
+            if not dry_run:
+                storage.mark_seen(item.id, item.url)
+            continue
 
-        # Step 5: Persist updated state
-        if not dry_run:
-            storage.save()
+        # Qualified Opportunity!
+        will_send_count += 1
+        if dry_run:
+            print("\n" + "=" * 65)
+            print(f"🎯 [DRY-RUN MATCH] [{relevance}/10] {item.title}")
+            print(f"📌 Sumber: {item.source} | URL: {item.url}")
+            print(f"📝 Ringkasan: {analysis.get('summary')}")
+            print(f"💬 Draft Komentar (Threads):\n{analysis.get('comment_draft')}")
+            print(f"✉️ Draft DM:\n{analysis.get('dm_draft')}")
+            print("=" * 65 + "\n")
+        else:
+            sent = notifier.send_opportunity(item, analysis)
+            if sent:
+                logger.info("Notifikasi berhasil terkirim ke Telegram untuk '%s'", item.title[:40])
+            storage.mark_seen(item.id, item.url)
 
-        return 0
+    if dry_run:
+        logger.info("Total notifikasi yang AKAN dikirim (dry-run, tidak dikirim): %d", will_send_count)
+    else:
+        logger.info("Pipeline selesai. Total notifikasi terkirim: %d", will_send_count)
+        storage.save()
 
-    except Exception as e:
-        logger.critical(f"FATAL ERROR dalam pipeline bot: {e}", exc_info=True)
-        if not dry_run and storage.can_send_error_notification(cooldown_minutes=cooldown_error_min):
-            notifier.send_error_alert(f"Critical error: {str(e)}")
-            storage.record_error_notification_sent()
-            storage.save()
-        return 1
+    return 0
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Mobile Job Opportunity Bot")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Mobile Job Opportunity Bot (Threads Source)")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -213,6 +303,11 @@ def main():
         "--test-telegram",
         action="store_true",
         help="Kirim pesan tes ke Telegram untuk memvalidasi token dan chat_id.",
+    )
+    parser.add_argument(
+        "--test-threads",
+        action="store_true",
+        help="Uji panggilan Meta Threads API dengan satu keyword dan cetak hasil tanpa Gemini & Telegram.",
     )
     parser.add_argument(
         "--config",
@@ -236,6 +331,11 @@ def main():
         notifier = TelegramNotifier()
         success = notifier.send_test_message()
         sys.exit(0 if success else 1)
+
+    if args.test_threads:
+        config = load_config(args.config)
+        run_test_threads(config)
+        sys.exit(0)
 
     code = run_pipeline(dry_run=args.dry_run, config_path=args.config)
     sys.exit(code)

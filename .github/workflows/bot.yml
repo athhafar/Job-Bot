@@ -1,24 +1,24 @@
-name: Job Opportunity Bot
+name: Job Opportunity Bot (Threads)
 
 on:
   schedule:
-    # Berjalan otomatis setiap 20 menit (GitHub Actions gratis)
+    # Berjalan otomatis setiap 30 menit via GitHub Actions (Gratis)
     # Format cron: menit jam hari-bulan bulan hari-minggu (UTC)
-    - cron: '*/20 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
-    # Memungkinkan trigger manual lewat tab Actions di GitHub UI
+    # Trigger manual lewat tab Actions di GitHub UI
 
 # Cegah 2 workflow berjalan bersamaan untuk menghindari race condition pada seen.json
 concurrency:
-  group: job-opportunity-bot
+  group: job-opportunity-bot-threads
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  run-bot:
-    name: Run Mobile Job Opportunity Scanner
+  run-threads-bot:
+    name: Run Meta Threads Mobile Job Scanner
     runs-on: ubuntu-latest
 
     steps:
@@ -38,10 +38,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Execute Job Opportunity Bot
+      - name: Execute Threads Job Bot
         env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_APP_ID: ${{ secrets.THREADS_APP_ID }}
+          THREADS_APP_SECRET: ${{ secrets.THREADS_APP_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3.8-flash' }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3.1-flash-lite' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
@@ -52,11 +55,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add seen.json
-          # Hanya commit jika ada perubahan pada seen.json
+          # Commit hanya jika ada perubahan pada seen.json
           if ! git diff --cached --quiet; then
             git commit -m "chore: update seen.json [skip ci]"
             git push
             echo "State seen.json updated successfully."
           else
-            echo "Tidak ada lowongan baru yang diproses, seen.json tidak berubah."
+            echo "Tidak ada postingan baru yang diproses, seen.json tidak berubah."
           fi

@@ -1,10 +1,12 @@
-"""Unit tests for multi-stage job pre-filtering logic."""
-from datetime import datetime, timezone, timedelta
+"""Unit tests for strict whole-word regex filtering and opportunity qualification."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 import pytest
 
-from sources.base import JobItem
+from core.filters import JobFilter, build_keyword_regex
 from core.storage import Storage
-from core.filters import JobFilter
+from sources.base import JobItem
 
 
 @pytest.fixture
@@ -18,25 +20,35 @@ def sample_config():
             "include": [
                 "flutter",
                 "kotlin",
-                "android",
+                "android developer",
                 "react native",
                 "mobile developer",
+                "dart",
+                "expo",
             ],
             "hiring": [
                 "hiring",
+                "dicari",
+                "lowongan",
+                "butuh",
+                "need",
                 "looking for",
                 "freelance",
-                "contract",
-                "remote",
-                "lowongan",
+                "kontrak",
+                "open position",
+                "kirim cv",
+                "dm",
             ],
             "exclude": [
-                "unpaid",
-                "internship",
-                "magang",
-                "[for hire]",
-                "for hire",
+                "open to work",
+                "available for hire",
+                "cari kerja",
                 "looking for a job",
+                "for hire",
+                "[for hire]",
+                "unpaid",
+                "magang",
+                "internship",
             ],
         },
     }
@@ -48,15 +60,25 @@ def in_memory_storage(tmp_path):
     return Storage(filepath=str(storage_file))
 
 
-def test_filter_valid_opportunity_passes(sample_config, in_memory_storage):
+def test_whole_word_regex_prevents_partial_match():
+    """Verifies that 'expo' does NOT match 'exposure' or 'exposition'."""
+    pattern = build_keyword_regex("expo")
+    assert pattern.search("We are using expo SDK 52") is not None
+    assert pattern.search("Expo is our primary framework") is not None
+    assert pattern.search("High exposure to sunlight") is None
+    assert pattern.search("exposition of art") is None
+
+
+def test_filter_valid_threads_opportunity_passes(sample_config, in_memory_storage):
     job_filter = JobFilter(config=sample_config, storage=in_memory_storage)
     item = JobItem(
-        id="job_1",
-        title="We are hiring a Senior Flutter Developer (Remote)",
-        text="Looking for an experienced Flutter engineer to lead our cross-platform app development.",
-        url="https://example.com/job1",
-        source="Test RSS",
+        id="threads_1",
+        title="Dicari Mobile Developer Flutter untuk kontrak 3 bulan",
+        text="Halo teman-teman Threads, kami sedang butuh programmer Flutter freelance. DM saya untuk detailnya ya!",
+        url="https://www.threads.net/@recruiter/post/1",
+        source="Threads (@recruiter)",
         published=datetime.now(timezone.utc) - timedelta(hours=2),
+        username="recruiter",
     )
 
     passed, reason = job_filter.evaluate(item)
@@ -64,47 +86,51 @@ def test_filter_valid_opportunity_passes(sample_config, in_memory_storage):
     assert "Passed filters" in reason
 
 
-def test_filter_rejects_missing_mobile_keyword(sample_config, in_memory_storage):
+def test_filter_rejects_exposure_when_only_expo_is_keyword(sample_config, in_memory_storage):
+    """Verifies that a post containing 'exposure' does NOT pass as an Expo mobile dev job."""
     job_filter = JobFilter(config=sample_config, storage=in_memory_storage)
     item = JobItem(
-        id="job_2",
-        title="We are hiring a Senior Python Django Backend Developer",
-        text="Remote position open for backend API services.",
-        url="https://example.com/job2",
-        source="Test RSS",
+        id="threads_2",
+        title="We are hiring a Marketing Lead with exposure to digital media",
+        text="Need someone with high brand exposure experience.",
+        url="https://www.threads.net/@hr/post/2",
+        source="Threads",
         published=datetime.now(timezone.utc) - timedelta(hours=1),
     )
 
     passed, reason = job_filter.evaluate(item)
     assert passed is False
-    assert "Missing mobile developer include keyword" in reason
+    assert "Missing required mobile developer keyword" in reason
 
 
-def test_filter_rejects_job_seeker_for_hire(sample_config, in_memory_storage):
+def test_filter_rejects_remote_or_opportunity_standing_alone(sample_config, in_memory_storage):
+    """Verifies that 'remote' and 'opportunity' CANNOT stand alone as passing criteria."""
     job_filter = JobFilter(config=sample_config, storage=in_memory_storage)
+    # This post has mobile keyword 'flutter', and has 'remote' and 'opportunity',
+    # but DOES NOT have any specific hiring signal (hiring, dicari, butuh, freelance, etc.)
     item = JobItem(
-        id="job_3",
-        title="[FOR HIRE] Experienced Flutter and React Native Developer available for freelance",
-        text="I can build your mobile apps with high quality.",
-        url="https://example.com/job3",
-        source="Reddit: r/forhire",
+        id="threads_3",
+        title="Thoughts on Flutter in this remote opportunity era",
+        text="Just sharing some insights about how Flutter provides great remote opportunities for developers.",
+        url="https://www.threads.net/@dev/post/3",
+        source="Threads",
         published=datetime.now(timezone.utc) - timedelta(hours=1),
     )
 
     passed, reason = job_filter.evaluate(item)
     assert passed is False
-    assert "Matched exclude keyword: '[for hire]'" in reason
+    assert "Missing specific hiring/opportunity signal" in reason
 
 
-def test_filter_rejects_unpaid_or_internship(sample_config, in_memory_storage):
+def test_filter_rejects_job_seekers(sample_config, in_memory_storage):
     job_filter = JobFilter(config=sample_config, storage=in_memory_storage)
     item = JobItem(
-        id="job_4",
-        title="Looking for Android Kotlin Mobile Developer Internship",
-        text="Unpaid internship opportunity for students.",
-        url="https://example.com/job4",
-        source="Test",
-        published=datetime.now(timezone.utc) - timedelta(hours=3),
+        id="threads_4",
+        title="Flutter developer open to work! Looking for a job",
+        text="Available for hire as React Native / Flutter developer. Please DM me!",
+        url="https://www.threads.net/@jobseeker/post/4",
+        source="Threads",
+        published=datetime.now(timezone.utc) - timedelta(hours=1),
     )
 
     passed, reason = job_filter.evaluate(item)
@@ -115,12 +141,12 @@ def test_filter_rejects_unpaid_or_internship(sample_config, in_memory_storage):
 def test_filter_rejects_old_post(sample_config, in_memory_storage):
     job_filter = JobFilter(config=sample_config, storage=in_memory_storage)
     item = JobItem(
-        id="job_5",
-        title="Hiring Mobile Developer - Flutter / Kotlin",
-        text="Remote role for mobile developer.",
-        url="https://example.com/job5",
-        source="Test",
-        published=datetime.now(timezone.utc) - timedelta(hours=48),
+        id="threads_5",
+        title="Hiring Flutter Developer",
+        text="We are hiring Flutter developers for freelance contract.",
+        url="https://www.threads.net/@co/post/5",
+        source="Threads",
+        published=datetime.now(timezone.utc) - timedelta(hours=36),
     )
 
     passed, reason = job_filter.evaluate(item)
@@ -128,25 +154,25 @@ def test_filter_rejects_old_post(sample_config, in_memory_storage):
     assert "Post is too old" in reason
 
 
-def test_filter_rejects_already_seen_id(sample_config, in_memory_storage):
+def test_filter_rejects_seen_item(sample_config, in_memory_storage):
     job_filter = JobFilter(config=sample_config, storage=in_memory_storage)
     item = JobItem(
-        id="job_6",
-        title="Hiring React Native Developer (Contract)",
-        text="Need developer for mobile application.",
-        url="https://example.com/job6",
-        source="Test",
+        id="threads_6",
+        title="Lowongan Android Developer Kotlin",
+        text="Dicari developer Android Kotlin untuk kontrak remote.",
+        url="https://www.threads.net/@hr/post/6",
+        source="Threads",
         published=datetime.now(timezone.utc) - timedelta(hours=2),
     )
 
-    # First time -> passes
-    passed, _ = job_filter.evaluate(item)
-    assert passed is True
+    # First time passes
+    passed1, _ = job_filter.evaluate(item)
+    assert passed1 is True
 
     # Mark as seen
     in_memory_storage.mark_seen(item.id, item.url)
 
-    # Second time -> rejected as duplicate
+    # Second time rejected
     passed2, reason2 = job_filter.evaluate(item)
     assert passed2 is False
     assert "Already processed (seen)" in reason2

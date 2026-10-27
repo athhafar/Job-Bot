@@ -1,9 +1,11 @@
-"""Telegram notification module with HTML parse mode, inline keyboard, and message splitting."""
+"""Telegram notification module for Meta Threads Job Opportunity Bot."""
+from __future__ import annotations
+
 import html
 import json
 import logging
 import os
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 import requests
 
 from sources.base import JobItem
@@ -12,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
-    """Sends formatted job opportunities and error alerts to Telegram."""
+    """Delivers formatted job opportunity alerts and throttled system warnings to Telegram."""
 
     TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 
@@ -21,104 +23,171 @@ class TelegramNotifier:
         token: Optional[str] = None,
         chat_id: Optional[str] = None,
         timeout: int = 15,
-    ):
+    ) -> None:
         self.token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
         self.chat_id = (chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
         self.timeout = timeout
 
-        if not self.token or not self.chat_id:
-            logger.warning("TELEGRAM_BOT_TOKEN atau TELEGRAM_CHAT_ID belum diatur!")
-
     @property
     def is_configured(self) -> bool:
-        """Returns True if bot token and chat ID are both present."""
-        return bool(self.token and self.chat_id)
+        if not self.token or self.token.startswith("ISI_"):
+            return False
+        if not self.chat_id or self.chat_id.startswith("ISI_"):
+            return False
+        return True
 
     def send_opportunity(self, item: JobItem, analysis: Dict[str, Any]) -> bool:
-        """Formats and sends an opportunity notification with drafts to Telegram."""
+        """Formats and delivers an opportunity alert to Telegram."""
         if not self.is_configured:
-            logger.error("Tidak dapat mengirim ke Telegram: TELEGRAM_BOT_TOKEN atau TELEGRAM_CHAT_ID kosong.")
+            logger.error("Tidak dapat mengirim ke Telegram: TELEGRAM_BOT_TOKEN atau TELEGRAM_CHAT_ID belum diisi.")
             return False
 
-        relevance = analysis.get("relevance", 7)
-        summary = analysis.get("summary", "Peluang lowongan baru terdeteksi.")
+        relevance = analysis.get("relevance")
+        summary = analysis.get("summary", "")
         comment_draft = analysis.get("comment_draft", "")
         dm_draft = analysis.get("dm_draft", "")
-        used_fallback = analysis.get("used_fallback", False)
+        failed_ai = analysis.get("failed_ai", False)
 
-        fallback_badge = " ⚠️ <i>(Template Statis - Gemini Rate Limit)</i>" if used_fallback else ""
+        # Header badge
+        if failed_ai or relevance is None:
+            score_header = "🔔 <b>[⚠️ Tanpa penilaian AI]</b>"
+        else:
+            score_header = f"🔔 <b>[{relevance}/10]</b>"
 
-        # Format publication date
+        username_display = f"@{item.username}" if item.username else "Threads User"
         published_str = item.published.strftime("%d %b %Y, %H:%M UTC")
 
-        # HTML escape all dynamic text to prevent Telegram entity parsing errors
         escaped_title = html.escape(item.title)
-        escaped_source = html.escape(item.source)
+        escaped_username = html.escape(username_display)
         escaped_summary = html.escape(summary)
         escaped_url = html.escape(item.url)
         escaped_comment = html.escape(comment_draft)
         escaped_dm = html.escape(dm_draft)
 
-        message_html = (
-            f"🔔 <b>[{relevance}/10] {escaped_title}</b>{fallback_badge}\n"
-            f"📌 {escaped_source} • {published_str}\n\n"
-            f"📝 <b>Ringkasan:</b> {escaped_summary}\n\n"
-            f"🔗 <b>Link:</b> {escaped_url}\n\n"
-            f"💬 <b>Draft Komentar:</b> <i>(Tap teks untuk copy)</i>\n"
-            f"<code>{escaped_comment}</code>\n\n"
-            f"✉️ <b>Draft DM:</b> <i>(Tap teks untuk copy)</i>\n"
-            f"<code>{escaped_dm}</code>"
-        )
+        message_parts = [
+            f"{score_header} <b>{escaped_title}</b>",
+            f"📌 <b>Threads:</b> {escaped_username} • {published_str}",
+            "",
+            f"📝 <b>Ringkasan:</b> {escaped_summary}",
+            "",
+            f"🔗 <b>Link:</b> {escaped_url}",
+        ]
+
+        if escaped_comment:
+            message_parts.extend([
+                "",
+                "💬 <b>Draft Komentar:</b> <i>(Tap teks untuk copy)</i>",
+                f"<code>{escaped_comment}</code>",
+            ])
+
+        if escaped_dm:
+            message_parts.extend([
+                "",
+                "✉️ <b>Draft DM:</b> <i>(Tap teks untuk copy)</i>",
+                f"<code>{escaped_dm}</code>",
+            ])
+
+        message_html = "\n".join(message_parts)
 
         inline_keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "🔗 Buka Postingan", "url": item.url}
+                    {"text": "🧵 Buka di Threads", "url": item.url}
                 ]
             ]
         }
 
         return self._send_telegram_message(message_html, reply_markup=inline_keyboard)
 
-    def send_error_alert(self, error_message: str) -> bool:
-        """Sends a high-priority system alert to Telegram when a run fails critically."""
+    def send_token_expired_alert(self) -> bool:
+        """Sends alert when Threads access token has expired (HTTP 401)."""
         if not self.is_configured:
             return False
+        text = (
+            "🚨 <b>Peringatan: Token Threads Kedaluwarsa</b>\n\n"
+            "Token Threads Anda sudah tidak valid atau kedaluwarsa (HTTP 401).\n"
+            "Silakan buat ulang token di <b>Meta User Token Generator</b> lalu perbarui "
+            "Secrets repositori Anda.\n\n"
+            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
+        )
+        return self._send_telegram_message(text)
 
+    def send_permission_alert(self) -> bool:
+        """Sends alert when Threads keyword search permission is not approved or restricted (HTTP 403)."""
+        if not self.is_configured:
+            return False
+        text = (
+            "⚠️ <b>Peringatan: Permission Threads Ditolak (HTTP 403)</b>\n\n"
+            "API Threads mengembalikan error 403 Forbidden. Pastikan permission "
+            "<code>threads_keyword_search</code> sudah aktif di App Dashboard Anda.\n\n"
+            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
+        )
+        return self._send_telegram_message(text)
+
+    def send_gemini_quota_alert(self) -> bool:
+        """Sends alert when Gemini 429 rate limit triggered consecutively."""
+        if not self.is_configured:
+            return False
+        text = (
+            "⚠️ <b>Peringatan: Kuota Gemini Habis</b>\n\n"
+            "Terjadi 2x rate-limit (HTTP 429) berturut-turut dari Gemini API. "
+            "Pemanggilan AI dihentikan sementara untuk run ini. Postingan lolos filter "
+            "akan dikirim dengan template tanpa skor AI dan tidak ditandai seen agar dicoba lagi.\n\n"
+            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
+        )
+        return self._send_telegram_message(text)
+
+    def send_token_expiry_warning(self, remaining_days: int) -> bool:
+        """Sends reminder when token is nearing expiration (< 10 days)."""
+        if not self.is_configured:
+            return False
+        text = (
+            f"⏳ <b>Peringatan: Masa Berlaku Token Threads Tersisa {remaining_days} Hari</b>\n\n"
+            "Segera jalankan skrip perpanjangan token:\n"
+            "<code>python scripts/refresh_token.py</code>\n\n"
+            "Lalu perbarui GitHub Secrets <code>THREADS_ACCESS_TOKEN</code> Anda.\n"
+            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
+        )
+        return self._send_telegram_message(text)
+
+    def send_error_alert(self, error_message: str) -> bool:
+        """Sends general system failure notification (throttled to 1/hour)."""
+        if not self.is_configured:
+            return False
         escaped_err = html.escape(error_message[:1000])
         text = (
-            "🚨 <b>Job Opportunity Bot Alert</b>\n"
-            "Terjadi kegagalan pada proses otomatis bot:\n\n"
+            "🚨 <b>Job Opportunity Bot - System Alert</b>\n\n"
             f"<code>{escaped_err}</code>\n\n"
-            "<i>Notifikasi ini dibatasi maksimal 1 kali per jam. Silakan periksa log GitHub Actions.</i>"
+            "<i>(Notifikasi ini dibatasi maksimal 1 kali per jam)</i>"
         )
         return self._send_telegram_message(text)
 
     def send_test_message(self) -> bool:
-        """Sends a test verification message to ensure token and chat_id are valid."""
+        """Validates token and chat ID with test message."""
         if not self.is_configured:
-            print("ERROR: TELEGRAM_BOT_TOKEN atau TELEGRAM_CHAT_ID belum diatur!")
+            print("ERROR: TELEGRAM_BOT_TOKEN atau TELEGRAM_CHAT_ID belum diatur di .env!")
             return False
 
         text = (
-            "✅ <b>Job Opportunity Bot - Uji Koneksi Berhasil!</b>\n\n"
-            "Bot berhasil terhubung ke chat Anda.\n"
-            "• Bot Token: Valid\n"
+            "✅ <b>Job Opportunity Bot (Threads) - Koneksi Berhasil!</b>\n\n"
+            "Bot Telegram Anda terhubung dengan sempurna.\n"
+            "• Sumber Aktif: <b>Meta Threads API</b>\n"
             f"• Chat ID: <code>{html.escape(self.chat_id)}</code>\n\n"
-            "Bot siap memantau lowongan mobile development dan mengirimkan draft balasan AI!"
+            "Bot siap memantau peluang lowongan mobile development di Threads!"
         )
         success = self._send_telegram_message(text)
         if success:
-            print("SUKSES: Pesan tes Telegram berhasil dikirim ke Chat ID Anda!")
+            print("SUKSES: Pesan verifikasi berhasil dikirim ke akun Telegram Anda!")
         else:
-            print("GAGAL: Pengiriman pesan tes Telegram gagal. Periksa token dan Chat ID.")
+            print("GAGAL: Pengiriman pesan Telegram gagal. Periksa token dan Chat ID.")
         return success
 
-    def _send_telegram_message(self, text_html: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
-        """Handles sending, HTML parse mode, and message splitting if >4096 characters."""
+    def _send_telegram_message(
+        self,
+        text_html: str,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         url = f"{self.TELEGRAM_API_BASE}{self.token}/sendMessage"
-
-        # Split message into chunks if exceeding Telegram's 4096 character limit
         chunks = self._split_message(text_html, max_length=4000)
 
         for i, chunk in enumerate(chunks):
@@ -128,33 +197,29 @@ class TelegramNotifier:
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
-            # Attach inline button to the last chunk
             if i == len(chunks) - 1 and reply_markup:
                 payload["reply_markup"] = json.dumps(reply_markup)
 
             try:
                 resp = requests.post(url, json=payload, timeout=self.timeout)
                 if resp.status_code != 200:
-                    logger.error(f"Gagal mengirim pesan Telegram (HTTP {resp.status_code}): {resp.text}")
-                    # Try plain text fallback if HTML parse failed
+                    logger.error("Gagal mengirim Telegram (HTTP %d): %s", resp.status_code, resp.text)
                     if "can't parse entities" in resp.text:
-                        logger.warning("Mencoba kirim ulang dengan plain text...")
                         payload.pop("parse_mode", None)
-                        fallback_resp = requests.post(url, json=payload, timeout=self.timeout)
-                        return fallback_resp.status_code == 200
+                        fallback = requests.post(url, json=payload, timeout=self.timeout)
+                        return fallback.status_code == 200
                     return False
             except Exception as e:
-                logger.error(f"Exception saat kirim ke Telegram: {e}")
+                logger.error("Exception saat kirim ke Telegram: %s", e)
                 return False
 
         return True
 
-    def _split_message(self, text: str, max_length: int = 4000) -> list[str]:
-        """Splits long text by newlines so Telegram messages never exceed limit."""
+    def _split_message(self, text: str, max_length: int = 4000) -> List[str]:
         if len(text) <= max_length:
             return [text]
 
-        chunks = []
+        chunks: List[str] = []
         current_chunk = ""
         for line in text.split("\n"):
             if len(current_chunk) + len(line) + 1 > max_length:
