@@ -1,14 +1,14 @@
-# 🧵 Mobile Job Opportunity Bot (Meta Threads Source)
+# 🧵 Mobile Job Opportunity Bot (Threads Scraper Source)
 
-> **Bot Pemantau Peluang & Lowongan Mobile Development Otomatis via Meta Threads Resmi (Rp0)**
-> Memantau postingan publik di Meta Threads menggunakan **Graph API Resmi (Tanpa Scraping)**, menyaring lowongan dengan filter kata utuh (`\b`) cerdas, lalu menggunakan **Google Gemini AI** untuk menilai relevansi dan menyusun **DRAFT Balasan (Komentar & DM)** yang siap dikirim langsung ke **Telegram** Anda.
+> **Bot Pemantau Peluang & Lowongan Mobile Development Otomatis via Scraper Threads (Rp0)**
+> Memantau postingan publik di Meta Threads menggunakan scraper **Playwright headless** (`threads-parser` dari fork), menyaring lowongan dengan filter kata utuh (`\b`) cerdas, lalu menggunakan **Google Gemini AI** untuk menilai relevansi dan menyusun **DRAFT Balasan (Komentar & DM)** yang siap dikirim langsung ke **Telegram** Anda.
 
 ---
 
 ## 🔒 Kebijakan Keamanan & Privasi
-- **Zero Scraping:** 100% menggunakan API resmi Meta Threads (`graph.threads.net/v1.0/keyword_search`). Dilarang keras menggunakan headless browser, akun bot palsu, atau teknik scraping yang melanggar Terms of Service.
-- **Zero Auto-Spam:** Bot **TIDAK PERNAH** melakukan auto-reply, auto-post, atau auto-DM. Bot hanya membaca dan mengirim notifikasi beserta draft ke Telegram pribadi Anda. Anda yang mereview dan mengirimkannya sendiri secara manual.
-- **Perlindungan Rahasia:** Tidak ada API key, token, atau secret yang disimpan di dalam kode maupun dicetak ke log. Seluruh kredensial dikelola via environment variable `.env` lokal atau GitHub Secrets.
+- **Zero Auto-Spam:** Bot **TIDAK PERNAH** melakukan auto-reply, auto-post, atau auto-DM. Bot hanya membaca secara anonim (tanpa login) dan mengirim notifikasi beserta draft ke Telegram pribadi Anda. Anda yang mereview dan mengirimkannya sendiri secara manual.
+- **Perlindungan Rahasia:** Tidak ada API key atau secret yang disimpan di dalam kode maupun dicetak ke log. Seluruh kredensial dikelola via environment variable `.env` lokal atau GitHub Secrets.
+- **Repo Private:** Repositori Job-Bot bersifat Private karena memuat data profil personal developer (`config/profile.md`).
 
 ---
 
@@ -21,67 +21,35 @@
 │   └── profile.md           # Profil mobile developer Anda (dibaca oleh Gemini)
 ├── prompts/
 │   └── draft.txt            # System prompt instruksi Gemini untuk evaluasi & pembuatan draft balasan
-├── sources/                 # Modul sumber data Meta Threads
+├── sources/                 # Modul sumber data
 │   ├── __init__.py
 │   ├── base.py              # Definisi JobItem dataclass dan BaseSource interface
-│   └── threads.py           # Pemanggil resmi Meta Threads Keyword Search API
+│   └── threads_scraper.py   # Pemanggil scraper Threads Playwright via subprocess terisolasi
 ├── core/                    # Logika inti sistem
 │   ├── __init__.py
 │   ├── filters.py           # Filter kata utuh (regex \b), pencegah eksposur palsu & pencari kerja
 │   ├── gemini_client.py     # Gemini client (flash-lite), timeout 45s, jeda 6s, no-fake-score fallback
 │   ├── notifier.py          # Pengirim Telegram format HTML (single-tap copyable <code>, tombol Threads)
-│   ├── storage.py           # Persistence state seen.json (dibatasi 5000 ID) & rate-limit peringatan
-│   └── threads_token.py     # Pengelola inspeksi, refresh token jangka panjang (th_refresh_token), & exchange
-├── scripts/
-│   └── refresh_token.py     # Skrip manual pembaruan token 60 hari tanpa menyimpan secret ke repo
+│   └── storage.py           # Persistence state seen.json (dibatasi 5000 ID) & cooldown alert
 ├── tests/                   # Unit test otomatis (pytest)
 │   ├── __init__.py
-│   ├── test_threads.py      # Uji mock API Threads, penanganan HTTP 401, 403, dan token manager
+│   ├── test_threads_scraper.py # Uji parser output scraper, CLI error handling, dan jeda antar-keyword
 │   ├── test_filters.py      # Uji regex kata utuh (\b), expo vs exposure, penolakan pencari kerja
 │   └── test_gemini.py       # Uji parsing JSON, limit 429 beruntun, dan validasi profile.md
 ├── seen.json                # Database penampung ID Threads yang sudah diproses
-├── requirements.txt         # Dependensi Python minimal (requests, feedparser, python-dotenv, pyyaml, pytest)
-├── .env.example             # Contoh template environment variables (hanya placeholder)
+├── requirements.txt         # Dependensi Python (threads-parser fork, playwright, gemini, dll.)
+├── .env.example             # Contoh template environment variables
 ├── .gitignore               # Konfigurasi pengabaian file rahasia (.env) dan cache
 ├── .github/workflows/
-│   └── bot.yml              # GitHub Actions cron setiap 30 menit (GRATIS) + auto-commit seen.json
+│   └── bot.yml              # GitHub Actions cron setiap 60 menit (hemat kuota) + auto-commit seen.json
 └── README.md                # Dokumentasi lengkap panduan setup
 ```
 
 ---
 
-## 🚀 Panduan Setup Lengkap dari Nol (Langkah Demi Langkah)
+## 🚀 Panduan Setup Lengkap dari Nol
 
-### Langkah 1: Buat Meta App & Dapatkan Token Threads
-
-1. **Daftar Meta for Developers**:
-   - Buka [developers.facebook.com](https://developers.facebook.com/) dan login dengan akun Meta/Facebook Anda.
-   - Klik **My Apps** > **Create App**.
-   - Pilih jenis use-case: **Other** > **Business** (atau **Threads API** jika tersedia langsung).
-   - Beri nama aplikasi Anda (contoh: `Job Hunter Alert`).
-
-2. **Tambahkan Use Case Threads**:
-   - Di App Dashboard, pada menu **Add products to your app**, cari **Threads** dan klik **Set up**.
-   - Tambahkan permission:
-     - `threads_basic` (izin dasar profil dan konten)
-     - `threads_keyword_search` (izin pencarian keyword postingan publik)
-
-3. **Tambahkan Akun sebagai Threads Tester**:
-   - Di menu sisi kiri, klik **App Roles** > **Roles**.
-   - Pada bagian **Threads Testers**, klik **Add Threads Testers**.
-   - Masukkan username Threads Anda (contoh: `username_anda`).
-   - Buka aplikasi Threads di HP Anda: buka **Settings** > **Account** > **Website permissions** > **Invites**, lalu terima undangan tester.
-
-4. **Generate Long-Lived User Access Token**:
-   - Kembali ke Meta Developers Dashboard > **Threads** > **User Token Generator**.
-   - Klik **Generate Token** di samping username Threads Anda.
-   - Berikan izin saat jendela otorisasi muncul.
-   - Salin token berumur panjang (~60 hari) yang dihasilkan.
-   > **PENTING**: Token ini bersifat rahasia. Jangan pernah membagikannya atau meng-commit-nya ke git!
-
----
-
-### Langkah 2: Dapatkan Gemini API Key Gratis
+### Langkah 1: Dapatkan Gemini API Key Gratis
 
 1. Kunjungi [Google AI Studio](https://aistudio.google.com/app/apikey).
 2. Login dengan akun Google Anda dan klik **Get API key** > **Create API key**.
@@ -89,7 +57,7 @@
 
 ---
 
-### Langkah 3: Buat Bot Telegram & Ambil Chat ID
+### Langkah 2: Buat Bot Telegram & Ambil Chat ID
 
 1. **Buat Bot via @BotFather**:
    - Buka Telegram, cari `@BotFather`, lalu kirim `/newbot`.
@@ -101,7 +69,7 @@
 
 ---
 
-### Langkah 4: Konfigurasi File `.env` & `config/profile.md`
+### Langkah 3: Konfigurasi File `.env` & `config/profile.md`
 
 1. **Salin file template environment**:
    ```bash
@@ -109,111 +77,127 @@
    ```
 2. **Edit `.env`** dan masukkan kredensial Anda:
    ```env
-   THREADS_ACCESS_TOKEN=THQW...token_anda_dari_user_token_generator
-   THREADS_APP_ID=
-   THREADS_APP_SECRET=
    GEMINI_API_KEY=AIzaSy...api_key_gemini_anda
    GEMINI_MODEL=gemini-3.1-flash-lite
    TELEGRAM_BOT_TOKEN=123456789:ABC...
    TELEGRAM_CHAT_ID=123456789
    ```
-   *(Catatan: `THREADS_APP_ID` dan `THREADS_APP_SECRET` opsional jika Anda sudah memakai token dari User Token Generator).*
 
 3. **Isi `config/profile.md`**:
-   Buka file `config/profile.md` dan gantikan seluruh placeholder (seperti nama, keahlian Flutter/Kotlin/React Native, link GitHub/portofolio asli Anda).
-   > *Jika placeholder seperti `yourusername` belum diganti, bot akan menolak mengirim notifikasi demi mencegah pengiriman draft dengan data palsu.*
+   Buka file `config/profile.md` dan lengkapi dengan portofolio, keahlian Flutter/Kotlin/React Native, serta link GitHub asli Anda.
+   *(Jika placeholder seperti `yourusername` belum diganti, bot akan menolak jalan demi mencegah pengiriman draft dengan data palsu).*
 
 ---
 
-### Langkah 5: Pengujian Lokal di Komputer Anda
+### Langkah 4: Pengujian Lokal di Komputer Anda
 
-1. **Install Dependensi**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Buat virtual environment Python 3.12 dengan `uv`:
 
-2. **Uji Koneksi Telegram**:
+```bash
+uv venv --python 3.12 --managed-python
+source .venv/bin/activate
+uv pip install -r requirements.txt
+playwright install chromium
+```
+
+1. **Uji Koneksi Telegram**:
    ```bash
    python main.py --test-telegram
    ```
-   *Pesan verifikasi akan langsung masuk ke HP Anda.*
+   *Pesan verifikasi akan langsung masuk ke Telegram Anda.*
 
-3. **Uji Koneksi Threads API**:
+2. **Uji Koneksi Scraper Threads**:
    ```bash
    python main.py --test-threads
    ```
-   *Bot akan memanggil API Threads dan menampilkan jumlah postingan serta 3 contoh hasil tanpa menyentuh Gemini atau Telegram.*
+   *Scraper akan memindai satu keyword uji dan mencetak hasil postingan tanpa memanggil Gemini atau Telegram.*
 
-4. **Jalankan Simulasi Penuh (Dry Run)**:
+3. **Jalankan Simulasi Penuh (Dry Run)**:
    ```bash
    python main.py --dry-run
    ```
-   *Seluruh alur dijalankan (Threads -> regex filter -> evaluasi Gemini), dan hasil dicetak ke terminal tanpa mengirim pesan Telegram dan tanpa memodifikasi `seen.json`.*
+   *Seluruh alur dijalankan (Scraper -> regex filter -> evaluasi Gemini), dan hasil dicetak ke terminal tanpa mengirim pesan Telegram dan tanpa memodifikasi `seen.json`.*
 
-5. **Jalankan Unit Test**:
+4. **Jalankan Seluruh Unit Test**:
    ```bash
    pytest tests/ -v
    ```
 
 ---
 
-### Langkah 6: Setup GitHub Actions (Otomatis & Gratis)
+### Langkah 5: Setup GitHub Actions (Otomatis & Hemat Kuota)
 
 1. **Push ke GitHub**:
    ```bash
-   git init
    git add .
-   git commit -m "feat: initial commit threads job opportunity bot"
-   git branch -M main
-   git remote add origin https://github.com/<username>/<repo>.git
-   git push -u origin main
+   git commit -m "feat: integrate threads playwright scraper"
+   git push origin main
    ```
 
 2. **Isi GitHub Secrets**:
    Buka repositori Anda di GitHub > **Settings** > **Secrets and variables** > **Actions** > **New repository secret**. Tambahkan:
-   - `THREADS_ACCESS_TOKEN`
-   - `THREADS_APP_ID` (opsional)
-   - `THREADS_APP_SECRET` (opsional)
    - `GEMINI_API_KEY`
    - `GEMINI_MODEL` (default: `gemini-3.1-flash-lite`)
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
 
-3. **Atur Izin Workflow**:
-   Di tab **Settings** > **Actions** > **General** > **Workflow permissions**, pilih **Read and write permissions** (agar bot dapat melakukan auto-commit pada `seen.json`).
+   *(Catatan: `THREADS_ACCESS_TOKEN`, `THREADS_APP_ID`, dan `THREADS_APP_SECRET` sudah tidak digunakan dan bisa dihapus dari Secrets).*
 
-4. Bot akan otomatis berjalan **setiap 30 menit** melalui cron GitHub Actions gratis! Anda juga bisa menjalankannya secara manual kapan saja melalui tombol **Run workflow** di tab Actions.
+3. **Atur Izin Workflow**:
+   Di tab **Settings** > **Actions** > **General** > **Workflow permissions**, pilih **Read and write permissions** (agar GitHub Actions dapat melakukan auto-commit pembaruan `seen.json`).
+
+4. **Jadwal Eksekusi**:
+   Workflow dijalankan otomatis **setiap 60 menit** (`0 * * * *`) via GitHub Actions. Dengan browser cache Playwright, konsumsi waktu adalah ~1 - 1,5 menit/run (~720 - 1.080 menit/bulan), aman di dalam kuota 2.000 menit gratis repositori private.
 
 ---
 
-## 🔄 Cara Memperpanjang Token Threads (Setiap ~60 Hari)
+## 🔄 Cara Memperbarui Versi Scraper
 
-Token dari User Token Generator Meta bertahan selama 60 hari dan dapat diperpanjang secara resmi melalui endpoint `th_refresh_token`:
+Scraper `threads-parser` dipasang langsung dari fork repositori Anda yang dikunci ke commit hash:
 
-1. Jalankan skrip pembaruan token:
+1. Buat commit perubahan atau pull update upstream di repo fork Anda (`Threads-Scraper-Meta`).
+2. Push ke GitHub: `git push origin main`.
+3. Dapatkan hash commit terbaru:
    ```bash
-   python scripts/refresh_token.py
+   git -C /Users/dit-atha/Atha/Threads-Scraper-Meta rev-parse HEAD
    ```
-2. Skrip akan mencetak token baru yang sudah diperpanjang beserta tanggal kedaluwarsanya.
-3. Salin token baru tersebut ke `.env` lokal dan ke GitHub Secret `THREADS_ACCESS_TOKEN` Anda.
-4. Jika sisa masa berlaku token Anda kurang dari 10 hari, bot secara otomatis akan mengirimkan notifikasi pengingat ke Telegram Anda.
+4. Buka `requirements.txt` di Job-Bot dan perbarui baris scraper dengan commit hash baru:
+   ```text
+   threads-parser @ git+https://github.com/athhafar/Threads-Scraper-Meta.git@<COMMIT_HASH_BARU>
+   ```
+5. Install ulang dependensi lokal:
+   ```bash
+   uv pip install -r requirements.txt
+   ```
+6. Commit dan push perubahan `requirements.txt` ke repo Job-Bot.
 
 ---
 
 ## 💡 Troubleshooting & Penanganan Kendala
 
-### 1. HTTP 403 Forbidden pada Threads API
-- **Penyebab**: Aplikasi Meta Anda belum memiliki izin `threads_keyword_search` aktif.
-- **Kondisi Sebelum App Review Disetujui**: Sebelum aplikasi Anda lolos App Review Meta, API hanya akan mengembalikan postingan yang dibuat oleh akun tester Anda sendiri. Untuk mengujinya, buat postingan uji coba di akun Threads Anda yang mengandung kata `flutter developer hiring` lalu jalankan `python main.py --test-threads`.
-- **Solusi Produksi**: Ajukan App Review untuk permission `threads_keyword_search` di Meta Developer Dashboard.
+### 1. `Error: Threads search results payload was not found`
+- **Penyebab**: Threads tidak menemukan hasil pencarian untuk keyword tersebut dalam mode publik tanpa login, atau Threads mengembalikan halaman kosong tanpa payload GraphQL.
+- **Perilaku Bot**: Bot menangani error ini dengan aman (graceful fallback). Kegagalan pada satu keyword tidak akan menghentikan pemindaian keyword lainnya.
+- **Solusi**: Gunakan keyword pencarian yang lebih umum di `config.yaml` (misalnya `"flutter developer"` atau `"hiring flutter"` alih-alih kalimat spesifik yang panjang).
 
-### 2. HTTP 401 Unauthorized / Token Expired
-- **Penyebab**: Token Threads sudah melewati 60 hari atau telah di-revoke.
-- **Solusi**: Buka kembali User Token Generator di App Dashboard Meta dan klik *Generate Token* baru, lalu perbarui `.env` dan GitHub Secrets Anda.
+### 2. Hasil Scraper Kosong Sepanjang Run
+- Jika selama 1 run scraper menghasilkan 0 postingan atau diblokir, bot akan mengirimkan peringatan otomatis ke Telegram (dibatasi maksimal 1 kali per 6 jam) via `seen.json` rate-limiting.
+- Cek apakah Threads sedang mengubah struktur DOM atau memblokir pencarian tanpa login.
 
-### 3. HTTP 429 Rate Limit (Gemini atau Threads)
-- **Threads API**: Memiliki batas 2.200 kueri per 24 jam. Bot sudah dikonfigurasi dengan jeda 1,5 detik antar kueri dan maksimal 10 request per eksekusi.
-- **Gemini API**: Bot memiliki exponential backoff otomatis dan menghormati header `Retry-After`. Jika terjadi 2 kali error 429 berturut-turut, bot akan menghentikan pemanggilan AI untuk sisa run tersebut dan mengirimkan 1 peringatan ke Telegram. Postingan yang lolos filter tetap dikirim dengan label *"⚠️ Tanpa penilaian AI"* dan **tidak dimasukkan ke `seen.json`**, sehingga akan dievaluasi ulang saat kuota Gemini pulih.
+### 3. Playwright Gagal Terpasang / Browser Chromium Hilang
+- Jalankan ulang instalasi browser Playwright:
+  ```bash
+  playwright install chromium
+  ```
+- Di lingkungan Linux / GitHub Actions, tambahkan `--with-deps`:
+  ```bash
+  playwright install --with-deps chromium
+  ```
 
-### 4. "Isi config/profile.md dulu"
-- Bot mendeteksi masih ada teks placeholder contoh (seperti `yourusername` atau `[Nama Lengkap Anda]`). Buka file `config/profile.md` dan lengkapi dengan data asli Anda.
+---
+
+## ⚠️ Catatan Risiko & Etika Scraping
+
+1. **Bukan API Resmi Meta**: Scraper ini bekerja dengan mengekstrak data dari web Threads publik. Meta sewaktu-waktu dapat memperbarui antarmuka atau endpoint GraphQL internal yang dapat menyebabkan parser memerlukan update.
+2. **IP Datacenter GitHub Actions**: Alamat IP mesin GitHub Actions berasal dari Microsoft Azure/datacenter yang lebih mudah terdeteksi atau dibatasi oleh sistem proteksi Threads dibandingkan IP residensial (koneksi Wi-Fi/Mac lokal Anda). Jika run di GitHub Actions sering menghasilkan 0 postingan sementara di Mac berhasil, jalankan bot secara terjadwal di komputer lokal atau VPS residensial/pribadi.
+3. **Peringatan Privasi Akun**: Selalu jalankan scraper ini dalam mode **tanpa login (guest/anonymous)**. Jangan pernah memasukkan akun Threads pribadi utama Anda ke scraper ini demi menghindari risiko pembatasan atau suspensi akun oleh platform Meta.
