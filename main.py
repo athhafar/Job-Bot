@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Mobile Job Opportunity Bot (Meta Threads Source Only).
+"""Mobile Job Opportunity Bot (Meta Threads Scraper Source).
 
-Monitors mobile development job opportunities exclusively via official Meta Threads API,
+Monitors mobile development job opportunities via Meta Threads Playwright Scraper,
 filters opportunities with strict whole-word regex matching, crafts professional response
 drafts using Google Gemini AI, and delivers actionable alerts to Telegram.
 """
@@ -20,9 +20,8 @@ from core.filters import JobFilter
 from core.gemini_client import GeminiClient, validate_profile_content
 from core.notifier import TelegramNotifier
 from core.storage import Storage
-from core.threads_token import ThreadsTokenManager
 from sources.base import JobItem
-from sources.threads import ThreadsAPIError, ThreadsSource, mask_secret
+from sources.threads_scraper import ThreadsScraperError, ThreadsScraperSource
 
 # Load environment variables
 load_dotenv()
@@ -37,12 +36,12 @@ logger = logging.getLogger("JobBot-Threads")
 
 
 def check_required_env_vars() -> None:
-    """Validates that credentials exist and do not contain template placeholders."""
-    token = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
-    if not token or token.startswith("ISI_"):
-        logger.error("Isi THREADS_ACCESS_TOKEN di .env dulu.")
-        print("\n❌ ERROR: Isi THREADS_ACCESS_TOKEN di .env dulu.")
-        print("Dapatkan User Access Token dari Meta for Developers > Threads App > User Token Generator.\n")
+    """Validates that Gemini and Telegram credentials exist and do not contain template placeholders."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not gemini_key or gemini_key.startswith("ISI_"):
+        logger.error("Isi GEMINI_API_KEY di .env dulu.")
+        print("\n❌ ERROR: Isi GEMINI_API_KEY di .env dulu.")
+        print("Dapatkan API Key gratis dari Google AI Studio: https://aistudio.google.com/app/apikey\n")
         sys.exit(1)
 
 
@@ -55,29 +54,39 @@ def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
 
 
 def run_test_threads(config: Dict[str, Any]) -> None:
-    """Executes --test-threads to verify access token and API response."""
-    check_required_env_vars()
-    token = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
+    """Executes --test-threads to verify scraper execution and parse results."""
     threads_cfg = config.get("sources", {}).get("threads", {})
     keywords = threads_cfg.get("keywords", ["flutter developer"])
     test_kw = keywords[0] if keywords else "flutter developer"
 
     print("\n" + "=" * 65)
-    print("🔍 MENGUJI KONEKSI META THREADS API (--test-threads)")
-    print(f"Token Terdeteksi: {mask_secret(token)}")
+    print("🔍 MENGUJI KONEKSI THREADS SCRAPER (--test-threads)")
     print(f"Keyword Uji: '{test_kw}'")
     print("=" * 65)
 
-    source = ThreadsSource(
-        access_token=token,
+    source = ThreadsScraperSource(
         keywords=[test_kw],
-        timeout=int(config.get("settings", {}).get("request_timeout_seconds", 15)),
+        own_username=threads_cfg.get("own_username", ""),
+        delay_range=(0.0, 0.0),
+        max_posts_per_keyword=5,
+        cli_timeout=int(threads_cfg.get("scraper_timeout_seconds", 120)),
     )
 
     try:
-        count, sample_items = source.test_search(keyword=test_kw)
-        print(f"\n✅ Koneksi Threads API Berhasil!")
-        print(f"Total postingan ditemukan untuk '{test_kw}': {count}")
+        sample_items = source.fetch()
+        print(f"\n✅ Eksekusi Threads Scraper Berhasil!")
+        print(f"Total postingan ditemukan untuk '{test_kw}': {len(sample_items)}")
+        if sample_items:
+            print("\n📋 Contoh Postingan Teratas:")
+            for idx, it in enumerate(sample_items[:3], start=1):
+                print(f"  {idx}. [{it.source}] {it.title}")
+                print(f"     Penulis: @{it.username} | URL: {it.url}")
+        else:
+            print("ℹ️ Tidak ada postingan yang ditemukan untuk keyword ini.")
+        print("=" * 65 + "\n")
+    except Exception as e:
+        print(f"\n❌ Gagal menjalankan Threads scraper: {e}")
+        sys.exit(1)
         if sample_items:
             print("\n📋 3 Contoh Postingan Teratas:")
             for idx, it in enumerate(sample_items, start=1):
@@ -134,28 +143,21 @@ def run_pipeline(dry_run: bool = False, config_path: str = "config.yaml") -> int
     )
 
     logger.info("=" * 65)
-    logger.info("Starting Mobile Job Opportunity Bot (Meta Threads Source)")
+    logger.info("Starting Mobile Job Opportunity Bot (Threads Scraper Source)")
     logger.info("Dry Run Mode: %s", dry_run)
     logger.info("=" * 65)
 
-    # Check token health (Inspect token and alert if near expiry < 10 days)
-    threads_token = os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
-    token_mgr = ThreadsTokenManager(
-        access_token=threads_token,
-        app_id=os.environ.get("THREADS_APP_ID", "").strip(),
-        app_secret=os.environ.get("THREADS_APP_SECRET", "").strip(),
-        timeout=timeout_sec,
-    )
-
-    # 1. Fetch from Meta Threads API
+    # 1. Fetch from Meta Threads Scraper
     threads_cfg = config.get("sources", {}).get("threads", {})
-    source = ThreadsSource(
-        access_token=threads_token,
+    source = ThreadsScraperSource(
         keywords=threads_cfg.get("keywords", []),
         own_username=threads_cfg.get("own_username", ""),
-        delay_seconds=float(threads_cfg.get("rate_limit_delay_seconds", 1.5)),
-        max_requests_per_run=int(threads_cfg.get("max_requests_per_run", 10)),
-        max_pages_per_keyword=int(threads_cfg.get("max_pages_per_keyword", 2)),
+        delay_range=(
+            float(threads_cfg.get("min_delay_seconds", 5.0)),
+            float(threads_cfg.get("max_delay_seconds", 15.0)),
+        ),
+        max_posts_per_keyword=int(threads_cfg.get("max_posts_per_keyword", 20)),
+        cli_timeout=int(threads_cfg.get("scraper_timeout_seconds", 120)),
         timeout=timeout_sec,
     )
 
@@ -163,36 +165,23 @@ def run_pipeline(dry_run: bool = False, config_path: str = "config.yaml") -> int
     try:
         raw_items = source.fetch()
     except Exception as e:
-        logger.critical("Gagal mengambil data dari Threads: %s", e)
-        if not dry_run:
-            if source.token_expired_error and storage.can_send_token_expired_alert():
-                notifier.send_token_expired_alert()
-                storage.record_token_expired_alert_sent()
-                storage.save()
-            elif source.permission_error and storage.can_send_permission_alert():
-                notifier.send_permission_alert()
-                storage.record_permission_alert_sent()
-                storage.save()
-            elif storage.can_send_error_notification(cooldown_minutes=error_cooldown_min):
-                notifier.send_error_alert(f"Threads API Failure: {str(e)}")
-                storage.record_error_notification_sent()
-                storage.save()
-        return 1
+        logger.critical("Gagal mengambil data dari Threads scraper: %s", e)
+        raw_items = []
 
-    # Check for permission/token status reported by source
-    if source.token_expired_error:
-        if not dry_run and storage.can_send_token_expired_alert():
-            notifier.send_token_expired_alert()
-            storage.record_token_expired_alert_sent()
+    # Penanganan jika hasil scraper kosong atau error berturut-turut
+    if not raw_items:
+        logger.warning("Hasil scraper kosong atau terjadi kendala pemindaian.")
+        # Kirim peringatan via Telegram maksimal 1x per 6 jam (360 menit)
+        if not dry_run and storage.can_send_error_notification(cooldown_minutes=360):
+            err_msg = (
+                "Peringatan: Scraper Threads menghasilkan 0 postingan atau mengalami error. "
+                "Scraper mungkin diblokir oleh Threads atau struktur halaman berubah."
+            )
+            if source.last_error_message:
+                err_msg += f"\nDetail error: {source.last_error_message[:200]}"
+            notifier.send_error_alert(err_msg)
+            storage.record_error_notification_sent()
             storage.save()
-        return 1
-
-    if source.permission_error:
-        if not dry_run and storage.can_send_permission_alert():
-            notifier.send_permission_alert()
-            storage.record_permission_alert_sent()
-            storage.save()
-        return 1
 
     logger.info("Total postingan Threads diambil: %d", len(raw_items))
 

@@ -21,23 +21,24 @@ settings:
   # Jeda minimal pengiriman notifikasi error sistem umum ke Telegram (dalam menit)
   error_notify_cooldown_minutes: 60
 
-# Sumber Data: Meta Threads API Resmi (Tanpa Scraping)
+# Sumber Data: Meta Threads Scraper (Playwright via threads-parser)
 sources:
   threads:
     enabled: true
-    # Jeda antar request keyword (detik) untuk mencegah rate-limit
-    rate_limit_delay_seconds: 1.5
+    # Jeda acak antar request keyword (detik) agar sopan dan tidak agresif
+    min_delay_seconds: 5.0
+    max_delay_seconds: 15.0
 
-    # Batas total request ke Threads API per run
-    max_requests_per_run: 10
+    # Jumlah maksimal postingan yang diambil per keyword
+    max_posts_per_keyword: 20
 
-    # Batas halaman pagination per keyword
-    max_pages_per_keyword: 2
+    # Timeout CLI scraper per keyword (detik)
+    scraper_timeout_seconds: 120
 
     # Opsional: username akun Threads sendiri agar postingan sendiri diabaikan (tanpa tanda @)
     own_username: ""
 
-    # Daftar keyword pencarian di Threads API
+    # Daftar keyword pencarian di Threads
     keywords:
       - "flutter developer"
       - "kotlin android"

@@ -3,3 +3,5 @@ feedparser>=6.0.10
 python-dotenv>=1.0.0
 pyyaml>=6.0.1
 pytest>=7.4.0
+playwright>=1.48,<2
+threads-parser @ git+https://github.com/athhafar/Threads-Scraper-Meta.git@3abd7dabcb1bfa24e9f1ac90bcac78f50b4f63c9
