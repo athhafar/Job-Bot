@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional, Tuple
 import requests
 
 from sources.base import JobItem
-from sources.threads import mask_secret
 
 logger = logging.getLogger(__name__)
 

@@ -99,31 +99,6 @@ class TelegramNotifier:
 
         return self._send_telegram_message(message_html, reply_markup=inline_keyboard)
 
-    def send_token_expired_alert(self) -> bool:
-        """Sends alert when Threads access token has expired (HTTP 401)."""
-        if not self.is_configured:
-            return False
-        text = (
-            "🚨 <b>Peringatan: Token Threads Kedaluwarsa</b>\n\n"
-            "Token Threads Anda sudah tidak valid atau kedaluwarsa (HTTP 401).\n"
-            "Silakan buat ulang token di <b>Meta User Token Generator</b> lalu perbarui "
-            "Secrets repositori Anda.\n\n"
-            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
-        )
-        return self._send_telegram_message(text)
-
-    def send_permission_alert(self) -> bool:
-        """Sends alert when Threads keyword search permission is not approved or restricted (HTTP 403)."""
-        if not self.is_configured:
-            return False
-        text = (
-            "⚠️ <b>Peringatan: Permission Threads Ditolak (HTTP 403)</b>\n\n"
-            "API Threads mengembalikan error 403 Forbidden. Pastikan permission "
-            "<code>threads_keyword_search</code> sudah aktif di App Dashboard Anda.\n\n"
-            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
-        )
-        return self._send_telegram_message(text)
-
     def send_gemini_quota_alert(self) -> bool:
         """Sends alert when Gemini 429 rate limit triggered consecutively."""
         if not self.is_configured:
@@ -133,19 +108,6 @@ class TelegramNotifier:
             "Terjadi 2x rate-limit (HTTP 429) berturut-turut dari Gemini API. "
             "Pemanggilan AI dihentikan sementara untuk run ini. Postingan lolos filter "
             "akan dikirim dengan template tanpa skor AI dan tidak ditandai seen agar dicoba lagi.\n\n"
-            "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
-        )
-        return self._send_telegram_message(text)
-
-    def send_token_expiry_warning(self, remaining_days: int) -> bool:
-        """Sends reminder when token is nearing expiration (< 10 days)."""
-        if not self.is_configured:
-            return False
-        text = (
-            f"⏳ <b>Peringatan: Masa Berlaku Token Threads Tersisa {remaining_days} Hari</b>\n\n"
-            "Segera jalankan skrip perpanjangan token:\n"
-            "<code>python scripts/refresh_token.py</code>\n\n"
-            "Lalu perbarui GitHub Secrets <code>THREADS_ACCESS_TOKEN</code> Anda.\n"
             "<i>(Notifikasi ini dibatasi maksimal 1 kali per hari)</i>"
         )
         return self._send_telegram_message(text)
