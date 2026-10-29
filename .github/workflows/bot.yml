@@ -2,9 +2,9 @@ name: Job Opportunity Bot (Threads)
 
 on:
   schedule:
-    # Berjalan otomatis setiap 30 menit via GitHub Actions (Gratis)
+    # Berjalan otomatis setiap 60 menit via GitHub Actions (Hemat kuota ~720 menit/bulan)
     # Format cron: menit jam hari-bulan bulan hari-minggu (UTC)
-    - cron: '*/30 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
     # Trigger manual lewat tab Actions di GitHub UI
 
@@ -20,6 +20,7 @@ jobs:
   run-threads-bot:
     name: Run Meta Threads Mobile Job Scanner
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Repository
@@ -38,11 +39,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Cache Playwright Browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright Browsers & System Dependencies
+        run: playwright install --with-deps chromium
+
       - name: Execute Threads Job Bot
         env:
-          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          THREADS_APP_ID: ${{ secrets.THREADS_APP_ID }}
-          THREADS_APP_SECRET: ${{ secrets.THREADS_APP_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3.1-flash-lite' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
